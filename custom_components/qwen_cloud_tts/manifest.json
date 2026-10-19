@@ -1,0 +1,15 @@
+{
+  "domain": "qwen_cloud_tts",
+  "name": "千问云端朗读",
+  "version": "0.2.0",
+  "config_flow": true,
+  "single_config_entry": true,
+  "dependencies": [
+    "tts"
+  ],
+  "requirements": [],
+  "codeowners": [],
+  "documentation": "https://help.aliyun.com/zh/model-studio/realtime-tts-user-guide",
+  "integration_type": "service",
+  "iot_class": "cloud_push"
+}

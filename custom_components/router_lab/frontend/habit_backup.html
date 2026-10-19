@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>习惯备份</title>
+<style>:root{font:15px/1.6 system-ui,"Microsoft YaHei",sans-serif;color-scheme:light dark;color:#243139;background:#fff}body{margin:0;padding:16px}h1{font-size:20px;margin:0 0 8px}p{font-size:13px;color:#647580;margin:8px 0}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}button,select{font:inherit;border:1px solid #c8d4db;border-radius:9px;padding:8px 12px;max-width:100%}button{cursor:pointer;background:#087ea4;color:#fff;border:0}button.secondary{background:#e7edf1;color:#304b5b}button:disabled{opacity:.5;cursor:wait}select{width:100%;background:transparent;color:inherit}.status{min-height:40px;color:#526874;font-size:13px;white-space:pre-wrap}.error{color:#b52c37}@media(prefers-color-scheme:dark){:root{background:#192126;color:#e4ebef}p,.status{color:#a5b9c5}button.secondary{background:#384955;color:#e4ebef}select{border-color:#41515c}}</style></head>
+<body><h1>习惯备份</h1><p>保存完整习惯和偏好，HA 保留一份，再下载到你的电脑。备份包含各账号的记忆，请用管理员账号操作。</p>
+<div class="actions"><button id="create" disabled>保存并下载备份</button><button id="download" class="secondary" disabled>下载选中备份</button></div>
+<select id="history" aria-label="选择已有备份"><option>正在读取备份记录…</option></select>
+<p id="summary">备份在本地完成。</p><div class="status" id="status" role="status" aria-live="polite">正在连接 HA…</div>
+<script>
+const $=id=>document.getElementById(id);let hass,busy=false,hasBackups=false;
+function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error)}
+function controls(){ $('create').disabled=!hass||busy;$('download').disabled=!hass||busy||!hasBackups;$('history').disabled=busy||!hasBackups }
+async function call(operation,filename){const result=await hass.callWS({type:'call_service',domain:'router_lab',service:'memory_backup',service_data:{operation,...(filename?{filename}:{})},return_response:true});return result.response}
+function save(result){if(!result.backup||result.backup.format!=='router_lab_habits_backup')throw Error('返回的备份格式不正确。');
+ const blob=new Blob([JSON.stringify(result.backup,null,2)],{type:'application/json;charset=utf-8'}),url=URL.createObjectURL(blob),link=document.createElement('a');
+ link.href=url;link.download=result.filename;document.body.append(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}
+async function refresh(){const result=await call('status');$('history').replaceChildren();hasBackups=!!result.backups?.length;
+ for(const item of result.backups||[]){const option=document.createElement('option');option.value=item.filename;option.textContent=new Date(item.created_at).toLocaleString('zh-CN')+' · '+item.counts.rules+'条习惯、'+item.counts.notes+'条偏好';$('history').append(option)}
+ if(!hasBackups){const option=document.createElement('option');option.textContent='还没有HA备份，点上方按钮保存一份。';$('history').append(option)}
+ $('summary').textContent=hasBackups?'HA已保存 '+result.backup_count+' 份备份。最近一份：'+new Date(result.last_created_at).toLocaleString('zh-CN'):'建议修改习惯前保存一份，下载后保存在自己的电脑上。';controls()}
+async function operate(operation){busy=true;controls();status(operation==='create'?'正在保存到HA并准备下载…':'正在读取备份…');
+ try{const result=await call(operation,operation==='download'?$('history').value:null);save(result);await refresh();status('HA副本已保存，已发起下载：'+result.filename+'\n若浏览器拦截下载，可再点“下载选中备份”。')}
+ catch(error){status(error.message||'没有完成，请确认使用管理员账号，稍后再试。',true)}finally{busy=false;controls()}}
+$('create').onclick=()=>operate('create');$('download').onclick=()=>operate('download');
+(async()=>{try{hass=window.parent.document.querySelector('home-assistant')?.hass;if(!hass)throw Error('请从HA“习惯记忆”页打开。');await refresh();status('可以保存新备份，或下载已有备份。')}catch(error){hass=null;status(error.message||'连接失败，请刷新页面。',true);controls()}})();
+</script></body></html>

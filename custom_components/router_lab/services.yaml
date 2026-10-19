@@ -1,0 +1,172 @@
+test:
+  name: 测试一句话
+  description: 通过实际路由和HA对话代理处理文字，返回分流、回复和虚拟设备状态变化。
+  fields:
+    text:
+      required: true
+      example: 打开客厅灯
+      selector:
+        text:
+    language:
+      default: zh-CN
+      selector:
+        text:
+    conversation_id:
+      description: 继续同一次对话时填写上次返回的conversation_id。
+      selector:
+        text:
+reset:
+  name: 重置虚拟家电
+  description: 关闭本集成的虚拟家电，窗帘全开、升降家具归零，并恢复模拟环境值。
+memory:
+  name: 管理生活习惯
+  description: 按当前HA用户查看、保存或删除多场景生活习惯。save_rule只保存不执行；delete_rule须提供list返回的id。
+  fields:
+    operation:
+      required: true
+      selector:
+        select:
+          options: [list, save_rule, delete_rule, save_note, delete_note, accept_suggestion, reject_suggestion, move_rules]
+    rule:
+      selector:
+        object:
+    scene:
+      description: move_rules的目标场景。
+      selector:
+        text:
+    ids:
+      description: move_rules要更正的规则ID列表。
+      selector:
+        object:
+    temporary:
+      default: false
+      selector:
+        boolean:
+    id:
+      selector:
+        text:
+    text:
+      selector:
+        text:
+preview_home:
+  name: 预览回家习惯
+  description: 只查看计划，不执行设备动作；可模拟下午/晚上、有人/无人、温度和照度。
+  fields:
+    hour:
+      selector:
+        number:
+          min: 0
+          max: 23
+    daylight:
+      selector:
+        boolean:
+    occupied:
+      selector:
+        boolean:
+    temperature:
+      selector:
+        number:
+          min: 0
+          max: 50
+    illuminance:
+      selector:
+        number:
+          min: 0
+          max: 2000
+enable_memory:
+  name: 接入DeepSeek记忆工具
+  description: 为已选择的DeepSeek代理增加本地记忆工具，保留原有模型、密钥和设备工具配置。
+diagnose_latency:
+  name: 测量DeepSeek接口延迟
+  description: 管理员诊断。capabilities只读配置；stream/non_stream使用固定的短提示词直接调用现有接口，产生少量API费用，不控制设备或修改习惯。
+  fields:
+    mode:
+      required: true
+      selector:
+        select:
+          options: [capabilities, stream, non_stream, stream_fast, non_stream_fast]
+speech_mode:
+  name: 朗读模式
+  description: 不填写mode时读取当前选项；管理员可设置整段或极速，切换对下一条回复生效，重启保留。
+  fields:
+    mode:
+      selector:
+        select:
+          options:
+            - label: 整段
+              value: natural
+            - label: 极速
+              value: fast
+
+memory_backup:
+  name: 备份习惯记忆
+  description: 管理员在本地保存完整习惯快照、下载已有备份或查看记录。不会执行习惯或修改原记忆。
+  fields:
+    operation:
+      name: 操作
+      default: status
+      selector:
+        select:
+          options:
+            - label: 保存备份
+              value: create
+            - label: 下载已有备份
+              value: download
+            - label: 查看记录
+              value: status
+    filename:
+      name: 已有备份文件名
+      selector:
+        text:
+
+route_mode:
+  name: 路由模式与空闲研究
+  description: 查看当前账号的研究记录，管理员可切换正常或节流、设置空闲时间及每日次数上限、启停扩展句式。后台研究不操作设备。
+  fields:
+    routing_mode:
+      selector:
+        select:
+          options:
+            - {label: 正常, value: normal}
+            - {label: 节流, value: economy}
+    idle_learning:
+      selector:
+        boolean:
+    learning_idle_seconds:
+      selector:
+        number: {min: 30, max: 3600, mode: box}
+    learning_daily_limit:
+      selector:
+        number: {min: 1, max: 20, mode: box}
+    operation:
+      default: status
+      selector:
+        select:
+          options: [status, enable, disable, retry]
+    rule_id:
+      selector:
+        text:
+
+preview_scene:
+  name: 预览生活场景
+  description: 只查看指定场景的动作计划，不操作设备。scene可填写home回家、away离家、sleep睡觉、wake起床或自定义场景名。
+  fields:
+    scene:
+      required: true
+      selector:
+        text:
+    hour:
+      selector:
+        number: {min: 0, max: 23}
+    daylight:
+      selector:
+        boolean:
+    occupied:
+      selector:
+        boolean:
+    temperature:
+      selector:
+        number: {min: 0, max: 50}
+    illuminance:
+      selector:
+        number: {min: 0, max: 2000}

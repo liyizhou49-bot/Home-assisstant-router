@@ -1,0 +1,11 @@
+{
+  "config": {
+    "step": {"user": {"title": "千问云端朗读", "description": "填写阿里云北京工作空间的API Host（不含https://）。密钥由HA保存。", "data": {"host": "API Host", "api_key": "API密钥", "voice": "默认音色", "fallback_engine": "发声前失败时使用的本地朗读"}}},
+    "error": {"invalid_host": "请填写正确的阿里云北京工作空间API Host。", "invalid_auth": "密钥验证失败。", "cannot_connect": "暂时无法连接千问，请检查网络、余额和模型权限。"},
+    "abort": {"single_instance_allowed": "已添加千问云端朗读，请打开现有集成的配置。"}
+  },
+  "options": {
+    "step": {"init": {"title": "千问云端朗读设置", "description": "可修改默认音色。密钥留空时保留原密钥。Assist中指定的音色优先于此处默认值，可在 设置 → 语音助手 中修改。", "data": {"host": "API Host", "api_key": "新API密钥（留空保留原值）", "voice": "默认音色", "fallback_engine": "发声前失败时使用的本地朗读"}}},
+    "error": {"invalid_host": "API Host不正确。", "invalid_auth": "密钥验证失败。", "cannot_connect": "暂时无法连接千问，请检查网络、余额和模型权限。"}
+  }
+}

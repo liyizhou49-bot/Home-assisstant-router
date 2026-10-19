@@ -1,0 +1,12 @@
+{
+  "schema": 1,
+  "note": "仅对应本测试集成创建的虚拟灯；不从测试集训练模型。",
+  "commands": [
+    {"id":"living_on","intent":"HassTurnOn","canonical":"打开客厅灯","aliases":["开启客厅灯","把客厅灯打开"]},
+    {"id":"living_off","intent":"HassTurnOff","canonical":"关闭客厅灯","aliases":["关掉客厅灯","把客厅灯关闭"]},
+    {"id":"bedroom_on","intent":"HassTurnOn","canonical":"打开卧室灯","aliases":["开启卧室灯"]},
+    {"id":"bedroom_off","intent":"HassTurnOff","canonical":"关闭卧室灯","aliases":["关掉卧室灯"]},
+    {"id":"entry_on","intent":"HassTurnOn","canonical":"打开玄关灯","aliases":["把玄关灯打开"]},
+    {"id":"entry_off","intent":"HassTurnOff","canonical":"关闭玄关灯","aliases":["关掉玄关灯"]}
+  ]
+}

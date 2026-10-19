@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>我的习惯清单</title>
+<style>
+:root{font:15px/1.65 system-ui,"Microsoft YaHei",sans-serif;color:#243139;background:#fff;color-scheme:light dark}body{margin:0;padding:18px}header{display:flex;justify-content:space-between;align-items:center;gap:12px}h1{font-size:21px;margin:0}h2{font-size:16px;margin:20px 0 8px}p{margin:6px 0;color:#647580;font-size:13px}button{font:inherit;border:0;border-radius:9px;background:#e8f3f7;color:#086b89;padding:7px 14px;cursor:pointer}button:disabled{opacity:.5;cursor:wait}ol{margin:0;padding:0;list-style:none;counter-reset:habits}li{padding:12px 14px;margin:8px 0;background:#f3f7f9;border-radius:10px;overflow-wrap:anywhere;white-space:pre-wrap}#rules li:not(.empty){counter-increment:habits}#rules li:not(.empty):before{content:counter(habits) ". ";font-weight:600;color:#087ea4}.empty{color:#647580;font-size:14px;background:none;padding:0}small{display:block;color:#647580;font-size:12px;margin-top:4px}.error{color:#b52c37}#status{min-height:22px}.hint{border-top:1px solid #e4ebef;padding-top:12px;margin-top:20px}
+@media(prefers-color-scheme:dark){:root{background:#192126;color:#e4ebef}p,small,.empty{color:#a5b9c5}li{background:#25333b}button{background:#294955;color:#bce9f8}.hint{border-color:#384955}}
+</style></head>
+<body>
+<header><h1>我的习惯清单</h1><button id="refresh" disabled>刷新</button></header>
+<p>显示当前登录账号的记忆；朗读和大模型不参与读取。</p>
+<p id="status" role="status" aria-live="polite">正在读取…</p>
+<main id="content" hidden>
+<section><h2 id="rules-title">长期生活习惯</h2><div id="rules"></div></section>
+<section><h2>临时安排</h2><ol id="temporary"></ol></section>
+<section><h2>生活偏好</h2><ol id="notes"></ol></section>
+<section><h2>待确认建议</h2><ol id="suggestions"></ol></section>
+<p class="hint">回家、离家、睡觉、起床和自定义场景分别保存、分别执行。说“我回来啦”“我出门了”“我要睡觉了”“我起床了”，或“开启观影模式”触发对应已存习惯。不会把离家规则用在回家；尚未接入定位或门磁自动触发。临时安排优先，待确认建议尚未生效。</p>
+<section class="hint"><h2>习惯备份</h2><p>备份保存在 HA 内；下载到电脑的文件包含个人习惯，请自行保管，不要上传到 GitHub。</p><button id="backupCreate">保存一份备份</button> <button id="backupDownload">下载最近备份</button><p id="backupStatus" role="status"></p></section></main>
+<script>
+const $=id=>document.getElementById(id);
+let busy=false,unsubscribe,alive=true;
+function parentHass(){let view=window.parent;for(let n=0;n<5&&view;n++){const hass=view.document.querySelector('home-assistant')?.hass;if(hass)return hass;if(view===view.parent)break;view=view.parent}}
+function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error)}
+function list(id,items,empty,text,detail){
+ const root=$(id);root.replaceChildren();
+ if(!items.length){const row=document.createElement('li');row.className='empty';row.textContent=empty;root.append(row);return}
+ for(const item of items){const row=document.createElement('li');row.textContent=text(item);const extra=detail?.(item);if(extra){const small=document.createElement('small');small.textContent=extra;row.append(small)}root.append(row)}
+}
+function render(data){
+ const rules=data.rules||[];
+ $('rules-title').textContent='长期生活习惯 · '+rules.length+'条';
+ $('rules').replaceChildren();const groups=new Map();
+ for(const item of rules){const key=item.scene||'home';if(!groups.has(key))groups.set(key,[]);groups.get(key).push(item)}
+ if(!rules.length){const empty=document.createElement('p');empty.textContent='还没有长期生活习惯。';$('rules').append(empty)}
+ for(const [scene,items] of groups){const section=document.createElement('section'),heading=document.createElement('h3'),rows=document.createElement('ol');
+  heading.style.cssText='font-size:15px;margin:14px 0 5px;color:#087ea4';heading.textContent=(items[0].scene_label||({home:'回家',away:'离家',sleep:'睡觉',wake:'起床'}[scene]||scene))+' · '+items.length+'条';
+  for(const item of items){const row=document.createElement('li');row.textContent=item.description||'这条习惯暂时无法显示，请刷新。';if(item.enabled===false){const note=document.createElement('small');note.textContent='已停用';row.append(note)}rows.append(row)}section.append(heading,rows);$('rules').append(section)}
+ list('temporary',data.temporary||[],'目前没有临时安排。',item=>item.description||'临时安排',item=>item.scope==='once'?'仅本次对话有效，执行一次后失效；最长20分钟。':'仅今天有效，到本地午夜失效。');
+ list('notes',data.notes||[],'还没有额外的生活偏好。',item=>item.text||'（空白偏好）');
+ list('suggestions',data.suggestions||[],'目前没有待确认建议。',item=>item.description||'待确认建议',()=> '尚未生效，需要你确认后才会加入习惯。');
+ $('content').hidden=false;
+}
+async function refresh(){
+ if(busy||!alive)return;
+ busy=true;$('refresh').disabled=true;
+ try{
+  const hass=parentHass();if(!hass)throw Error('请从HA的“习惯记忆”页面打开。');
+  const result=await hass.callWS({type:'call_service',domain:'router_lab',service:'memory',service_data:{operation:'list'},return_response:true});
+  if(!result.response||!Array.isArray(result.response.rules))throw Error('读取结果不完整，请稍后刷新。');
+  render(result.response);status('已读取本地记忆 · '+new Date().toLocaleTimeString('zh-CN'));
+ }catch(error){status(($('content').hidden?'读取失败：':'更新失败，以下为上次读取的内容：')+(error.message||'请重试。'),true)}
+ finally{busy=false;$('refresh').disabled=false}
+}
+$('refresh').onclick=refresh;
+async function backup(operation){const buttons=[$('backupCreate'),$('backupDownload')];buttons.forEach(b=>b.disabled=true);try{const hass=parentHass();const r=await hass.callWS({type:'call_service',domain:'router_lab',service:'memory_backup',service_data:{operation},return_response:true});const data=r.response;if(!data?.backup)throw Error('备份没有完成');$('backupStatus').textContent='已保存到 HA · '+new Date(data.created_at).toLocaleString('zh-CN');if(operation==='download'){const url=URL.createObjectURL(new Blob([JSON.stringify(data.backup,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=data.filename;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000)}}catch(e){$('backupStatus').textContent=e.message||'备份操作失败，需要管理员权限。'}finally{buttons.forEach(b=>b.disabled=false)}}
+$('backupCreate').onclick=()=>backup('create');$('backupDownload').onclick=()=>backup('download');
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
+window.addEventListener('pagehide',()=>{alive=false;unsubscribe?.()});
+(async()=>{
+ await refresh();
+ try{const hass=parentHass();if(hass?.connection){unsubscribe=await hass.connection.subscribeEvents(event=>{if(event.data.entity_id==='sensor.router_lab_memory')refresh()},'state_changed');if(!alive)unsubscribe()}}catch(error){/* Manual refresh remains available if subscriptions are unavailable. */}
+})();
+</script></body></html>

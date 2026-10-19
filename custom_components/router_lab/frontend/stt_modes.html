@@ -1,0 +1,46 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>语音识别模式</title>
+<style>:root{font:14px/1.5 system-ui,"Microsoft YaHei",sans-serif;color:#273b45;color-scheme:light dark}body{margin:0;padding:8px 2px}.row{display:flex;align-items:center;gap:9px;flex-wrap:wrap}button{font:inherit;border:1px solid #aac4ce;border-radius:10px;background:#edf3f5;color:#2e525f;padding:8px 17px;cursor:pointer}button[aria-pressed=true]{background:#087e91;border-color:#087e91;color:white}button:disabled{opacity:.55;cursor:wait}small{display:block;color:#647580;margin-top:7px}#status{margin-top:7px;font-size:13px;white-space:pre-wrap}.error{color:#b52c37}@media(prefers-color-scheme:dark){:root{color:#e0e9ed}button{background:#344e5a;color:#dfedf2;border-color:#617e88}small{color:#adc0ca}.error{color:#ffb8c1}}</style></head><body>
+<div class="row" role="group" aria-label="语音识别模式"><strong>语音识别</strong><button type="button" id="normal" aria-pressed="false" disabled>正常</button><button type="button" id="fast" aria-pressed="false" disabled>极速</button></div>
+<small>正常：SenseVoice，优先中文识别；极速：Whisper Base，优先速度。切换后自动保存，会短暂重启识别服务；需要时会下载模型。请在说话前切换。</small>
+<div id="status" role="status" aria-live="polite">正在读取识别设置…</div>
+<script>
+const $=id=>document.getElementById(id);
+const prompt='以下是简体中文的语音，请如实转写，保留原意。';
+const profiles={normal:{model:'auto',stt_library:'funasr',beam_size:5},fast:{model:'base-int8',stt_library:'faster-whisper',beam_size:1}};
+let hass,pipeline,working=false,current=null;
+function note(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error)}
+function selected(options){return Object.keys(profiles).find(k=>Object.entries(profiles[k]).every(([name,value])=>options[name]===value))||null}
+function render(info){current=selected(info.options||{});for(const key of Object.keys(profiles)){$(key).setAttribute('aria-pressed',String(current===key));$(key).disabled=working||info.state!=='started'}
+ if(!working)note(info.state!=='started'?'Whisper 尚未启动，请先在 HA 应用中启动。':current?'当前：'+(current==='normal'?'正常 · SenseVoice 中文':'极速 · Base INT8'):'当前为自定义识别配置，点击选择正常或极速。')}
+async function supervisor(endpoint,data){const result=await hass.callWS({type:'supervisor/api',endpoint:'/addons/core_whisper/'+endpoint,method:data===undefined?'get':'post',data:data||{},timeout:300});
+ if(result?.result==='error')throw Error('Whisper 应用没有完成操作。');return result?.data??result}
+async function refresh(){if(working||!hass)return;try{render(await supervisor('info'))}catch(e){for(const key of Object.keys(profiles))$(key).disabled=true;note('需要 HA 管理员权限及官方 Whisper 应用；其他识别引擎可在设置中选择。',true)}}
+async function switchMode(key){
+ if(working||!Object.hasOwn(profiles,key))return;
+ working=true;for(const id of Object.keys(profiles))$(id).disabled=true;
+ let before,target,changed=false;
+ try{
+  const list=await hass.callWS({type:'assist_pipeline/pipeline/list'});pipeline=list.pipelines.find(p=>p.conversation_engine==='conversation.router_lab');
+  if(pipeline?.stt_engine!=='stt.faster_whisper')throw Error('当前助手没有使用官方 Whisper。请先在设置中选择 Whisper 语音识别引擎。');
+  const info=await supervisor('info');before={...info.options};
+  target={...before,...profiles[key],language:'zh',whisper_task:'transcribe',initial_prompt:prompt,local_files_only:false,sherpa_streaming:false};
+  if(Object.entries(target).every(([k,v])=>JSON.stringify(before[k])===JSON.stringify(v))){render(info);note('当前已是'+(key==='normal'?'正常':'极速')+'识别。');return}
+  note('正在切换到'+(key==='normal'?'正常':'极速')+'识别，请稍候。需要下载或加载模型时等待较长，期间请先不要点麦克风。');
+  await supervisor('options',{options:target});changed=true;
+  await supervisor('restart',{});
+  const live=await supervisor('info');
+  if(live.state!=='started'||!Object.entries(target).every(([k,v])=>JSON.stringify(live.options?.[k])===JSON.stringify(v)))throw Error('识别服务尚未就绪或配置已被其他页面更改。');
+  render(live);note('已切换为'+(key==='normal'?'正常 · SenseVoice 中文':'极速 · Base INT8')+'。模型可能仍在加载；听到提示音后再说话。');
+ }catch(e){
+  let suffix='';
+  if(changed){try{const live=await supervisor('info');
+    if(Object.entries(target).every(([k,v])=>JSON.stringify(live.options?.[k])===JSON.stringify(v))){await supervisor('options',{options:{...live.options,...before}});await supervisor('restart',{});suffix=' 已恢复切换前的识别设置。'}
+    else suffix=' 当前配置已被其他页面修改，未覆盖它。';
+   }catch(restore){suffix=' 自动恢复未完成，请到 HA 的 Whisper 应用检查状态。'}}
+  note((e.message||'切换未完成，请检查 Whisper 应用和下载网络。')+suffix,true);
+ }finally{working=false;try{const info=await supervisor('info');current=selected(info.options||{});for(const key of Object.keys(profiles)){$(key).disabled=info.state!=='started';$(key).setAttribute('aria-pressed',String(current===key))}}catch(e){for(const key of Object.keys(profiles))$(key).disabled=true}}
+}
+for(const key of Object.keys(profiles))$(key).onclick=()=>switchMode(key);
+window.addEventListener('focus',refresh);
+(async()=>{try{let parent=window.parent;for(let n=0;n<7&&parent;n++){hass=parent.document.querySelector('home-assistant')?.hass;if(hass||parent===parent.parent)break;parent=parent.parent}if(!hass)throw Error('请从 HA 路由测试台打开。');await refresh()}catch(e){note(e.message||'无法连接 HA。',true)}})();
+</script></body></html>

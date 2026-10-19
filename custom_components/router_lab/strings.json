@@ -1,0 +1,56 @@
+{
+  "title": "路由测试台",
+  "config": {
+    "step": {
+      "user": {
+        "title": "连接本地路由和虚拟家电",
+        "description": "路由服务运行在Windows电脑。暂不选择LLM时，复杂句只会报告待处理。",
+        "data": {
+          "router_url": "路由服务地址",
+          "model": "分类模型",
+          "virtual_devices": "创建虚拟灯、空调和窗帘",
+          "llm_agent": "LLM对话代理（可暂时不选）",
+          "assistant_prompt": "DeepSeek提示词（回复风格，可自行修改）",
+          "memory_instructions": "高级：记忆与执行规则提示词",
+          "fast_response": "快速响应（关闭DeepSeek深度思考，可取消）",
+          "speech_mode": "播放方式（整段／极速）",
+          "routing_mode": "路由模式：正常 / 节流",
+          "idle_learning": "空闲时分析本地回退并补充句式",
+          "learning_idle_seconds": "停止输入多久后开始研究（秒）",
+          "learning_daily_limit": "后台研究每日调用上限"
+        }
+      }
+    },
+    "error": {
+      "invalid_url": "请输入有效的http或https路由服务地址。"
+    },
+    "abort": {
+      "single_instance_allowed": "只需添加一个路由测试台。"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "路由与LLM设置",
+        "description": "可在这里修改DeepSeek的说话方式和记忆规则。保存后下一次对话生效；实际习惯仍单独保存。",
+        "data": {
+          "router_url": "路由服务地址",
+          "model": "分类模型",
+          "virtual_devices": "创建虚拟家电",
+          "llm_agent": "LLM对话代理（可暂时不选）",
+          "assistant_prompt": "DeepSeek提示词（回复风格，可自行修改）",
+          "memory_instructions": "高级：记忆与执行规则提示词",
+          "fast_response": "快速响应（关闭DeepSeek深度思考，可取消）",
+          "speech_mode": "播放方式（整段／极速）",
+          "routing_mode": "路由模式：正常 / 节流",
+          "idle_learning": "空闲时分析本地回退并补充句式",
+          "learning_idle_seconds": "停止输入多久后开始研究（秒）",
+          "learning_daily_limit": "后台研究每日调用上限"
+        }
+      }
+    },
+    "error": {
+      "invalid_url": "请输入有效的http或https路由服务地址。"
+    }
+  }
+}

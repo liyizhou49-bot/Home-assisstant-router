@@ -1,0 +1,22 @@
+{
+  "domain": "router_lab",
+  "name": "路由测试台",
+  "version": "0.8.3",
+  "config_flow": true,
+  "single_config_entry": true,
+  "dependencies": [
+    "conversation",
+    "http",
+    "tts",
+    "assist_pipeline",
+    "stt"
+  ],
+  "requirements": [],
+  "codeowners": [
+    "@liyizhou49-bot"
+  ],
+  "documentation": "https://github.com/liyizhou49-bot/Home-assisstant-router",
+  "integration_type": "hub",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/liyizhou49-bot/Home-assisstant-router/issues"
+}
