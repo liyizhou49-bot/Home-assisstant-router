@@ -103,7 +103,7 @@ class IdleTests(unittest.IsolatedAsyncioTestCase):
         hass=types.SimpleNamespace(async_create_task=asyncio.create_task,services=types.SimpleNamespace(async_call=async_call),auth=types.SimpleNamespace(async_get_user=user))
         runtime={'settings':{'learning_idle_seconds':90,'learning_daily_limit':3},'memory':types.SimpleNamespace(view=lambda _: {'notes':[]})}
         learning=RouteLearning(hass,types.SimpleNamespace(entry_id='entry'),runtime)
-        learning.catalog=lambda *args:local.capabilities(states());learning.last_activity=0
+        learning.catalog=lambda *args:local.capabilities(states());learning.last_activity=learner_module.time.monotonic()-91
         self.addAsyncCleanup(learning.close)
         return learning,calls
     async def test_idle_research_activates_verified_rule_without_controlling_devices(self):
