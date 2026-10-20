@@ -2,7 +2,7 @@
 const fs=require('node:fs');const vm=require('node:vm');const assert=require('node:assert/strict');const path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'custom_components/router_lab/frontend/voice.html'),'utf8').match(/<script>([\s\S]*)<\/script>/)[1];
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
-function page(mode='natural'){
+function page(mode='natural',ttsEngine='tts.piper'){
  const audit={plays:0,fetches:[],subscriptions:[],revoked:[],savedMode:mode};const nodes={};let callback;
  class Element{
   constructor(id){this.id=id;this.value=id==='mode'?'natural':'';this.children=[];this.classList={toggle(){}};this.disabled=false;this.scrollHeight=10}
@@ -11,7 +11,7 @@ function page(mode='natural'){
   async play(){audit.plays++;this.onplaying?.()}
  }
  const get=id=>nodes[id]||(nodes[id]=new Element(id));
- const hass={callWS:async request=>request.type==='assist_pipeline/pipeline/list'?{pipelines:[{id:'pipeline',conversation_engine:'conversation.router_lab',tts_engine:'tts.piper'}]}:
+ const hass={states:{[ttsEngine]:{attributes:{friendly_name:ttsEngine==='tts.qwen_cloud_tts'?'千问云端朗读':'Piper 本地朗读'}}},callWS:async request=>request.type==='assist_pipeline/pipeline/list'?{pipelines:[{id:'pipeline',conversation_engine:'conversation.router_lab',tts_engine:ttsEngine}]}:
   {response:{mode:request.service_data.mode?(audit.savedMode=request.service_data.mode):audit.savedMode}},
   connection:{async subscribeEvents(cb){audit.traceEvent=cb;return ()=>{}},subscribeMessage(cb,options){callback=cb;audit.subscriptions.push(options);return Promise.resolve(()=>{})}}};
  const context={document:{getElementById:get,createElement:tag=>new Element(tag)},window:{parent:{document:{querySelector:()=>({hass})}}},
@@ -43,6 +43,11 @@ async function main(){let checks=0;
  cancelled.event('run-start',{conversation_id:'old',tts_output:{url:'/api/tts_proxy/old.mp3'}});cancelled.event('run-end');
  cancelled.get('new').onclick();assert.equal(cancelled.audit.fetches[0].options.signal.aborted,true);checks++;
  cancelled.audit.fetches[0].complete({type:'audio/mpeg'});await tick();await tick();assert.equal(cancelled.audit.plays,0);checks++;
+ const cloud=page('fast','tts.qwen_cloud_tts');await tick();assert.match(cloud.get('tts-status').textContent,/朗读设置：千问云端朗读/);checks++;
+ cloud.audit.traceEvent({data:{entity_id:'tts.qwen_cloud_tts',new_state:{attributes:{friendly_name:'千问云端朗读',last_synthesis:{status:'local_fallback',engine:'tts.piper',error:'audio_timeout'}}}}});
+ assert.match(cloud.get('tts-status').textContent,/Piper 本地备用/);assert.match(cloud.get('tts-status').textContent,/千问等待音频超时/);checks++;
+ cloud.audit.traceEvent({data:{entity_id:'tts.qwen_cloud_tts',new_state:{attributes:{friendly_name:'千问云端朗读',last_synthesis:{status:'complete',engine:'cloud'}}}}});
+ assert.match(cloud.get('tts-status').textContent,/最近实际生成：千问云端/);assert.doesNotMatch(cloud.get('tts-status').textContent,/最近实际生成：Piper/);checks++;
  const report={checks,passed:checks,scope:'actual frontend script with synthetic HA events; no real device calls'};
  console.log(JSON.stringify(report));
 }

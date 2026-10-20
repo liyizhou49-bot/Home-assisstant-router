@@ -11,8 +11,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: python -m pip install hassil==3.12.1 aiohttp==3.13.2
-      - run: python -m unittest test_unified_settings test_providers test_tool_stream test_qwen_cloud_tts test_scene_memory test_habits test_route_learning test_pipeline test_habit_backup test_speech_input test_microphone_gateway test_recognition_timing test_trace_card
+      - run: python -m pip install hassil==3.12.1 aiohttp==3.13.2 openpyxl==3.1.5
+      - run: python -m unittest test_unified_settings test_providers test_tool_stream test_qwen_cloud_tts test_scene_memory test_habits test_route_learning test_route_samples test_compound_commands test_pipeline test_habit_backup test_speech_input test_microphone_gateway test_recognition_timing test_trace_card
       - run: node test_settings_frontend.cjs
       - run: node test_voice_modes.cjs
       - run: node test_stt_modes.cjs
+      - run: node test_route_samples_frontend.cjs

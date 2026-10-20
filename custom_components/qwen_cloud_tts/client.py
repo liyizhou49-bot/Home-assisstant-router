@@ -101,18 +101,35 @@ class QwenClient:
         if self.protocol=='audio_http':
             async for chunk in self.http_stream(text_gen,voice,metrics):yield chunk
             return
+        # HA prepares its audio URL before recording/intent generation finishes.
+        # Do not open the cloud session or start its audio timeout while waiting
+        # for upstream STT/LLM text. Keep the first text chunk for the sender.
+        waiting = monotonic()
+        metrics.update(status='waiting_text', characters=0, chunks=0)
+        source = text_gen.__aiter__()
+        first = ''
+        async for chunk in source:
+            if chunk:
+                first += chunk
+                if len(first)>10000:raise CloudTTSError('text_too_long')
+                if first.strip():break
+        metrics['text_wait_ms'] = round((monotonic()-waiting)*1000,2)
+        if not first.strip():
+            metrics['status']='empty_text'
+            return
         started = monotonic()
+        metrics['status']='connecting'
         sock = await self._connect()
         sender = None
         audio_started = False
-        metrics.update(status='connecting', characters=0, chunks=0)
         try:
             await self._prepare(sock, voice)
             metrics['status'] = 'streaming'
 
             async def send_text():
                 try:
-                    async for chunk in text_gen:
+                    await self._send(sock, 'input_text_buffer.append', text=first)
+                    async for chunk in source:
                         if chunk:
                             await self._send(sock, 'input_text_buffer.append', text=chunk)
                     await self._send(sock, 'session.finish')

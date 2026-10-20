@@ -87,6 +87,7 @@ class RouterConversation(conversation.ConversationEntity):
         conversation_id=user_input.conversation_id or ulid_now()
         memory_session=memory.session(conversation_id,owner)
         memory_session['id']=conversation_id
+        stats['context_turns']=len(memory_session['exchanges'])
         turn={'owner':owner,'text':user_input.text,'session':memory_session,'tool_calls':[]}
 
         def spoken(text):
@@ -131,7 +132,39 @@ class RouterConversation(conversation.ConversationEntity):
                 stats.setdefault('local_failures',[]).append({'code':code,'retryable':retryable})
             return result, success, retryable
 
+        compound_cache={}
+        def compound_plan(text):
+            if text not in compound_cache:
+                batch=learning.match_compound(text,owner)
+                if batch and batch['ok'] and CONTEXTUAL.search(text):
+                    batch={**batch,'ok':False,'plans':[],'reason':'这组表达需要习惯或对话上下文。'}
+                compound_cache[text]=batch
+            return compound_cache[text]
+
+        async def execute_compound(batch):
+            local_started=perf_counter()
+            results=await learning.execute(batch['plans'],user_input.context,stop_on_failure=True)
+            stats.update(local_ms=round((perf_counter()-local_started)*1000,2),
+                         compound_commands=batch['clauses'],compound_results=results,compound_count=len(results))
+            return spoken(learning.response(results))
+
+        async def correct(text):
+            # Whole-sentence ASR correction must never drop an unrecognized second action.
+            if compound_plan(text) is not None:
+                return {'accepted':False,'reason':'compound_requires_full_match'}
+            return await request('/correct',text)
+
         async def local(text):
+            batch=compound_plan(text)
+            if batch is not None:
+                if batch['ok']:
+                    # Even a device failure ends this path: there may already be side effects.
+                    return await execute_compound(batch),True,False
+                stats['compound_rejection']=batch['reason']
+                stats.setdefault('local_failures',[]).append({'code':'compound_not_fully_matched','retryable':True})
+                result=spoken('组合指令没有全部通过本地识别，尚未执行。')
+                result.response.async_set_error(intent.IntentResponseErrorCode.NO_INTENT_MATCH,batch['reason'])
+                return result,False,True
             result,success,retryable=await forward(text, HOME_ASSISTANT_AGENT)
             if not success and retryable:
                 extension=learning.match(text,owner,canonical=True)
@@ -192,17 +225,42 @@ class RouterConversation(conversation.ConversationEntity):
                 trace={'input':user_input.text,'predicted_route':None,'final_route':'home_memory','status':'memory_list',
                        'scores':{},'attempts':[],'elapsed_ms':round((perf_counter()-started)*1000,2)}
             else:
-                learned=learning.match(user_input.text,owner) if not CONTEXTUAL.search(user_input.text) else None
-                if learned:
-                    results=await learning.execute([learned],user_input.context)
-                    result=spoken(learning.response(results))
+                compound_started=perf_counter()
+                batch=compound_plan(user_input.text)
+                stats['compound_parse_ms']=round((perf_counter()-compound_started)*1000,2)
+                direct=learning.match_direct(user_input.text,owner) if batch is None and not CONTEXTUAL.search(user_input.text) else None
+                resolved=None
+                context_age=perf_counter()-memory_session.get('last_turn_at',float('-inf'))
+                if direct is None and batch is None and memory_session['exchanges'] and 0<=context_age<=120:
+                    resolved=learning.match_followup(user_input.text,memory_session['exchanges'][-1])
+                    if resolved:direct=resolved['plan']
+                if batch and batch['ok']:
+                    result=await execute_compound(batch)
+                    complete=all(item['status']=='done' for item in stats['compound_results'])
                     trace={'input':user_input.text,'predicted_route':'hassil','final_route':'hassil',
-                           'status':'learned_local_success','attempts':[{'handler':'hassil_learned','rule_id':learned['rule_id']}],
+                           'status':'compound_local_success' if complete else 'compound_local_partial',
+                           'routing_source':'local_compound','router_bypassed':True,
+                           'attempts':[{'handler':'hassil_compound','count':len(batch['plans'])}],
                            'elapsed_ms':round((perf_counter()-started)*1000,2)}
+                elif direct:
+                    local_started=perf_counter()
+                    results=await learning.execute([direct],user_input.context)
+                    stats['local_ms']=round((perf_counter()-local_started)*1000,2)
+                    result=spoken(learning.response(results))
+                    complete=all(item['status']=='done' for item in results)
+                    learned=direct['rule_id']!='compound_builtin'
+                    trace={'input':user_input.text,'predicted_route':None,'final_route':'hassil',
+                           'routing_source':'local_verified','router_bypassed':True,
+                           'status':('learned_local_success' if learned else 'direct_local_success') if complete else 'direct_local_error',
+                           'attempts':[{'handler':'hassil_verified','rule_id':direct['rule_id']}],
+                           'elapsed_ms':round((perf_counter()-started)*1000,2)}
+                    if resolved:
+                        trace.update(context_resolution={'original':user_input.text,'resolved':resolved['text'],
+                                                        'source':'previous_target_question','age_seconds':round(context_age,2)})
                 else:
                     result, trace = await dispatch(user_input.text,
                         lambda text: request('/route', text), local,
-                        lambda text: request('/correct', text), llm if llm_id else None,
+                        correct, llm if llm_id else None,
                         contextual_llm=bool(CONTEXTUAL.search(user_input.text)))
         except Exception:
             result = None
@@ -221,6 +279,9 @@ class RouterConversation(conversation.ConversationEntity):
         trace['recognition']=await describe_speech(self.hass,speech or {'source':'not_recorded'})
         trace['routing_mode']=settings.get('routing_mode','normal')
         trace['local_failures']=stats.get('local_failures',[])
+        if stats.get('compound_commands'):
+            trace['compound_commands']=stats['compound_commands']
+            trace['compound_results']=stats['compound_results']
         if stats.get('economy_commands'):trace['fixed_commands']=stats['economy_commands']
         if turn['tool_calls']:
             trace['memory_tools']=turn['tool_calls']
@@ -231,6 +292,7 @@ class RouterConversation(conversation.ConversationEntity):
                 speech+=' 我注意到你多次这样调整：'+'；'.join(suggestions)+'。要记成长期习惯吗？'
                 result.response.async_set_speech(speech)
             memory_session['exchanges']=(memory_session['exchanges']+[{'user':user_input.text,'assistant':speech}])[-8:]
+            memory_session['last_turn_at']=perf_counter()
             trace['habit_suggestions']=suggestions
         try:await learning.enqueue(owner,trace,user_input.context)
         except Exception:

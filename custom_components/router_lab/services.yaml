@@ -121,7 +121,7 @@ memory_backup:
 
 route_mode:
   name: 路由模式与空闲研究
-  description: 查看当前账号的研究记录，管理员可切换正常或节流、设置空闲时间及每日次数上限、启停扩展句式。后台研究不操作设备。
+  description: 查看当前账号的研究和去重样本，管理员可设置路由、启停句式、确认样本标签并导出 Excel。后台研究不操作设备，重复句只累计次数。
   fields:
     routing_mode:
       selector:
@@ -142,10 +142,30 @@ route_mode:
       default: status
       selector:
         select:
-          options: [status, enable, disable, retry]
+          options: [status, enable, disable, retry, label, export]
     rule_id:
       selector:
         text:
+    sample_id:
+      name: 样本 ID
+      selector:
+        text:
+    label:
+      name: 人工确认的正确分流
+      selector:
+        select:
+          options:
+            - {label: 待确认, value: ''}
+            - {label: 应交给 Hassil, value: hassil}
+            - {label: 应交给 LLM, value: llm}
+    offset:
+      name: 样本分页起点
+      selector:
+        number: {min: 0, max: 5000, mode: box}
+    reviewed_only:
+      name: 只导出人工确认的样本
+      selector:
+        boolean:
 
 preview_scene:
   name: 预览生活场景

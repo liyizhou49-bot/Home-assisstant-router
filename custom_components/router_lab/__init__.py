@@ -114,15 +114,20 @@ async def async_setup(hass, config):
                 try:await learning.task
                 except __import__('asyncio').CancelledError:pass
             learning._schedule()
-        return await learning.manage(owner,operation,call.data.get('rule_id'))
+        return await learning.manage(owner,operation,call.data.get('rule_id'),
+            sample_id=call.data.get('sample_id'),label=call.data.get('label'),
+            offset=call.data.get('offset',0),reviewed_only=call.data.get('reviewed_only',False))
 
     hass.services.async_register(DOMAIN,'route_mode',route_mode,
         schema=vol.Schema({vol.Optional('routing_mode'):vol.In(['normal','economy']),
             vol.Optional('idle_learning'):bool,
             vol.Optional('learning_idle_seconds'):vol.All(int,vol.Range(min=30,max=3600)),
             vol.Optional('learning_daily_limit'):vol.All(int,vol.Range(min=1,max=20)),
-            vol.Optional('operation',default='status'):vol.In(['status','enable','disable','retry']),
-            vol.Optional('rule_id'):str}),supports_response=SupportsResponse.ONLY)
+            vol.Optional('operation',default='status'):vol.In(['status','enable','disable','retry','label','export']),
+            vol.Optional('rule_id'):str,vol.Optional('sample_id'):str,
+            vol.Optional('label'):vol.In(['','hassil','llm']),
+            vol.Optional('offset'):vol.All(int,vol.Range(min=0,max=5000)),
+            vol.Optional('reviewed_only'):bool}),supports_response=SupportsResponse.ONLY)
 
     hass.services.async_register(DOMAIN, 'test', run_test,
         schema=vol.Schema({vol.Required('text'): str, vol.Optional('language', default='zh-CN'): str,

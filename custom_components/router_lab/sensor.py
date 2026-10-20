@@ -32,7 +32,11 @@ class LearningSensor(SensorEntity):
         return {'status':learning.status,'rule_count':sum(r['enabled'] for r in learning.data['rules']),
                 'pending_count':sum(c['status']=='pending' for c in learning.data['cases']),
                 'daily_limit':learning.setting('learning_daily_limit',3),'usage':dict(learning.usage()),
-                'idle_learning':learning.setting('idle_learning',True)}
+                'idle_learning':learning.setting('idle_learning',True),
+                'sample_count':len(learning.data.get('samples',[])),
+                'sample_occurrences':sum(s['count'] for s in learning.data.get('samples',[])),
+                'reviewed_sample_count':sum(s.get('label') in ('llm','hassil') for s in learning.data.get('samples',[])),
+                'sample_overflow_count':sum(learning.data.get('sample_overflow',{}).values())}
 
 
 class LabSensor(LabDevice,SensorEntity):

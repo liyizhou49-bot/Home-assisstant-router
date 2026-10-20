@@ -17,10 +17,20 @@ def upgrade(config):
         if isinstance(value,dict):
             if value.get('type')=='markdown' and value.get('title')=='最近一次测试':
                 text=value.get('content','')
+                original=text
+                marker='"local_success":"本地处理成功",'
+                if marker in text and 'compound_local_success' not in text:
+                    text=text.replace(marker,marker+' "compound_local_success":"本地组合指令已完成", "compound_local_partial":"组合执行中断，已停止后续动作",',1)
+                if marker in text and 'direct_local_success' not in text:
+                    text=text.replace(marker,marker+' "direct_local_success":"明确指令已在本地完成", "direct_local_error":"本地执行失败，未重复动作",',1)
+                prediction='{{ state_attr("sensor.router_lab_trace", "predicted_route") or "—" }}'
+                if prediction in text and '跳过分类（本地完整匹配）' not in text:
+                    text=text.replace(prediction,'{% if state_attr("sensor.router_lab_trace", "router_bypassed") %}跳过分类（本地完整匹配）{% else %}'+prediction+'{% endif %}',1)
                 if '**语音识别：**' not in text:
                     marker='**耗时：**' if '**耗时：**' in text else '**文字处理：**'
                     if marker in text:
-                        value['content']=text.replace(marker,SPEECH_FIELDS+'**文字处理：**',1);count+=1
+                        text=text.replace(marker,SPEECH_FIELDS+'**文字处理：**',1)
+                if text!=original:value['content']=text;count+=1
             for child in value.values():visit(child)
         elif isinstance(value,list):
             for child in value:visit(child)

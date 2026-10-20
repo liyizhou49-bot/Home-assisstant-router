@@ -72,29 +72,37 @@ class QwenSpeech(TextToSpeechEntity):
             replay = ReplayText(request.message_gen)
             emitted = False
             metrics = {'voice': voice, 'engine': 'cloud','model':self.settings.get('model','qwen3-tts-flash-realtime')}
-            self.requests += 1
             try:
-                try:
-                    async with aclosing(self.entry.runtime_data.stream(replay.stream(), voice, metrics)) as stream:
-                        async for data in stream:
-                            emitted = True
-                            yield data
-                except CloudTTSError as error:
-                    metrics.update(status='failed', error=error.code)
-                    fallback = self.settings.get('fallback_engine')
-                    if emitted or not fallback or fallback == self.entity_id:
-                        raise HomeAssistantError('千问朗读暂时无法完成，请稍后重试。') from None
-                    message = await replay.complete()
-                    if not message:
-                        return
-                    media_id = generate_media_source_id(self.hass, message=message, engine=fallback,
-                                                        language='zh_CN', options=None, cache=True)
-                    extension, data = await tts.async_get_media_source_audio(self.hass, media_id)
-                    if extension != 'mp3' or not data:
-                        raise HomeAssistantError('本地备用朗读暂时不可用。')
-                    self.fallbacks += 1
-                    metrics.update(status='local_fallback', engine=fallback)
-                    yield data
+                for attempt in range(2):
+                    self.requests += 1;metrics['cloud_attempts']=attempt+1
+                    try:
+                        async with aclosing(self.entry.runtime_data.stream(replay.stream(), voice, metrics)) as stream:
+                            async for data in stream:
+                                emitted = True
+                                yield data
+                        break
+                    except CloudTTSError as error:
+                        # Retry one transient failure only before the first audible byte.
+                        # A fresh reader replays every text chunk; the producer is not restarted.
+                        if not emitted and attempt==0 and error.code in ('audio_timeout','connect_failed','connection_closed','stream_failed','invalid_response'):
+                            metrics.update(retry_count=1,retry_reason=error.code)
+                            continue
+                        metrics.update(status='failed', error=error.code)
+                        fallback = self.settings.get('fallback_engine')
+                        if emitted or not fallback or fallback == self.entity_id:
+                            raise HomeAssistantError('千问朗读暂时无法完成，请稍后重试。') from None
+                        message = await replay.complete()
+                        if not message:
+                            return
+                        media_id = generate_media_source_id(self.hass, message=message, engine=fallback,
+                                                            language='zh_CN', options=None, cache=True)
+                        extension, data = await tts.async_get_media_source_audio(self.hass, media_id)
+                        if extension != 'mp3' or not data:
+                            raise HomeAssistantError('本地备用朗读暂时不可用。')
+                        self.fallbacks += 1
+                        metrics.update(status='local_fallback', engine=fallback)
+                        yield data
+                        break
             finally:
                 await replay.close()
                 self.last_metrics = dict(metrics)

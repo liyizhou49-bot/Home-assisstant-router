@@ -6,6 +6,7 @@
 <div class="top"><div><h1>语音与文字对话</h1><div class="muted">使用当前助手的朗读引擎；可选择极速或自然播放。</div></div><button class="secondary" id="new">新对话</button></div>
 <iframe src="stt_modes.html?v=082" title="语音识别：正常或极速" style="border:0;width:100%;height:162px;margin-top:12px"></iframe>
 <div class="muted" id="recognition-status" role="status" aria-live="polite">最近语音识别：等待测试。</div>
+<div class="muted" id="tts-status" role="status" aria-live="polite">正在读取朗读设置与实际引擎…</div>
 <div class="actions"><label for="mode">播放方式</label><select id="mode" style="font:inherit;padding:7px;border-radius:8px"><option value="fast">极速</option><option value="natural">自然 · 整段</option></select><span class="muted" id="mode-help">整段：等完整音频后播放，等待较长。</span></div>
 <div class="chat" id="chat" aria-live="polite"><div class="empty" id="empty">试试“我回来啦”，或输入一段想问的话。</div></div>
 <audio id="audio" controls preload="none"></audio>
@@ -21,6 +22,16 @@ function recognitionStatus(attributes={}){const rec=attributes.recognition||{};
  if(rec.source!=='voice'){$('recognition-status').textContent='最近语音识别：尚未记录，请点击上方麦克风说一句。';return}
  const wait=typeof rec.recognition_ms==='number'?(rec.recognition_ms/1000).toFixed(2)+' 秒（检测说完后）':'结束时间未上报，无法精确计算';
  $('recognition-status').textContent='最近语音 · '+(rec.mode||rec.engine_name||'当前识别引擎')+' · 识别 '+wait+(typeof attributes.elapsed_ms==='number'?' · 文字处理 '+attributes.elapsed_ms.toFixed(1)+' 毫秒':'');
+}
+function ttsStatus(state){
+ const engine=pipeline?.tts_engine;if(!engine)return;
+ const current=state||hass.states?.[engine];const name=current?.attributes?.friendly_name||engine;const metrics=current?.attributes?.last_synthesis||{};
+ let text='朗读设置：'+name+'。';
+ if(metrics.status==='local_fallback'){const why={audio_timeout:'千问等待音频超时',connect_failed:'千问连接失败',invalid_auth:'千问认证失败'}[metrics.error]||'云端暂时不可用';text+='最近实际生成：'+(metrics.engine==='tts.piper'?'Piper 本地备用':metrics.engine)+'（'+why+'）。'}
+ else if(metrics.status==='complete')text+='最近实际生成：'+(metrics.engine==='cloud'?'千问云端':metrics.engine||name)+'。';
+ else if(metrics.status==='failed')text+='最近生成失败，请检查云端连接。';
+ if(engine==='tts.qwen_cloud_tts')text+='云端在出声前失败时会启用本地备用；缓存播放不一定产生新记录。';
+ $('tts-status').textContent=text;
 }
 window.addEventListener?.('pagehide',()=>stopTrace?.());
 function status(text,error=false){$('status').textContent=text;$('status').classList.toggle('error',error)}
@@ -39,7 +50,8 @@ async function connect(){
   if(!hass)throw Error('请从HA的路由测试台打开这个页面。');
   const list=await hass.callWS({type:'assist_pipeline/pipeline/list'});pipeline=list.pipelines.find(p=>p.conversation_engine==='conversation.router_lab');
   recognitionStatus(hass.states?.['sensor.router_lab_trace']?.attributes);
-  if(hass.connection.subscribeEvents)stopTrace=await hass.connection.subscribeEvents(event=>{if(event.data?.entity_id==='sensor.router_lab_trace')recognitionStatus(event.data.new_state?.attributes)},'state_changed');
+  ttsStatus();
+  if(hass.connection.subscribeEvents)stopTrace=await hass.connection.subscribeEvents(event=>{if(event.data?.entity_id==='sensor.router_lab_trace')recognitionStatus(event.data.new_state?.attributes);if(event.data?.entity_id===pipeline?.tts_engine)ttsStatus(event.data.new_state)},'state_changed');
   try{$('mode').value=await modeCall();modeHelp()}catch(e){modeHelp()}
   if(!pipeline?.tts_engine)throw Error('此助手尚未配置朗读引擎。');status('已连接 · '+(hass.states?.[pipeline.tts_engine]?.attributes?.friendly_name||(pipeline.tts_engine==='tts.piper'?'Piper 本地中文':'当前朗读引擎')));
  }catch(e){status(e.message||'连接失败，请刷新页面。',true);$('send').disabled=true}

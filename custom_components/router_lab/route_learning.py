@@ -2,10 +2,10 @@
 import asyncio
 import copy
 from datetime import timedelta
-import hashlib
 import json
 import logging
 import time
+import base64
 
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.dispatcher import async_dispatcher_send
@@ -13,6 +13,7 @@ from homeassistant.util import dt as dt_util
 from .const import SIGNAL_TRACE
 from .diagnostics import configured_client
 from .local_commands import capabilities,public,select_caps,parse_commands,evidence,validate_proposal,validate_value,actionable
+from . import route_samples
 
 _LOGGER=logging.getLogger(__name__)
 MODE_NAMES={'normal':'正常','economy':'节流'}
@@ -22,14 +23,17 @@ class RouteLearning:
     def __init__(self,hass,entry,runtime):
         self.hass,self.entry,self.runtime=hass,entry,runtime
         self.store=Store(hass,1,'router_lab_learning.'+entry.entry_id)
-        self.data={'rules':[],'cases':[],'usage':{},'revision':0}
+        self.data={'rules':[],'cases':[],'usage':{},'revision':0,'samples':[],'samples_version':1}
         self.active=0;self.last_activity=time.monotonic();self.timer=None;self.task=None;self.closed=False
         self.status='等待空闲';self.lock=asyncio.Lock()
 
     async def load(self):
         self.data=await self.store.async_load() or self.data
+        changed=route_samples.migrate(self.data,dt_util.now().isoformat())
         for case in self.data['cases']:
-            if case['status']=='researching':case['status']='pending'
+            if case['status']=='researching':
+                case['status']='pending';route_samples.sync_analysis(self.data,case);changed=True
+        if changed:await self.save()
 
     async def save(self):
         async with self.lock:await self.store.async_save(copy.deepcopy(self.data))
@@ -107,28 +111,51 @@ class RouteLearning:
 
     async def enqueue(self,owner,trace,context):
         if trace.get('predicted_route')!='hassil' or trace.get('final_route')!='llm':return
-        if trace.get('contextual_override'):return
         if not any(a.get('handler')=='hassil' for a in trace.get('attempts',[])):return
         text=trace.get('input','')
-        if not actionable(text):return
-        key=hashlib.sha256((owner+'|'+text).encode()).hexdigest()[:24]
-        if any(case['id']==key for case in self.data['cases']):return
+        if not isinstance(text,str) or not route_samples.normalize(text) or len(text)>4000:return
+        now=dt_util.now().isoformat()
+        eligible=actionable(text) and not trace.get('contextual_override')
+        reason='本地未匹配，已转交LLM；等待空闲分析。' if eligible else '已收集待人工标注；上下文或复杂表达不自动扩展本地句式。'
+        sample,new=route_samples.collect(self.data,owner,text,now,status='pending' if eligible else 'not_queued',
+            reason=reason,failure=trace.get('local_failures',[]),contextual=trace.get('contextual_override',False))
+        if not sample:
+            await self.save();return
+        if not new:
+            # A repeated utterance only increments frequency; it never spends another research call.
+            existing=next((c for c in self.data['cases'] if c['owner']==owner and route_samples.sample_id(owner,c['text'])==sample['id']),None)
+            if existing:existing.update(count=sample['count'],last_seen=now)
+            await self.save();return
+        if not eligible:
+            await self.save();return
         caps=self.catalog(context)
         proof=evidence(trace.get('state_changes',{}),caps)
         # Research receives just this instruction, parser failure and observed action,
         # never the user's habit store, unrelated history, API credentials, or TTS.
-        case={'id':key,'owner':owner,'text':text,'status':'pending','created_at':dt_util.now().isoformat(),
+        case={'id':sample['id'],'owner':owner,'text':text,'status':'pending','created_at':now,'last_seen':now,'count':1,
               'evidence':proof,'reason':'本地未匹配，已转交LLM；等待空闲分析。',
               'failure':trace.get('local_failures',[]),'attempts':0,
               'context_user_id':getattr(context,'user_id',None)}
         self.data['cases'].append(case)
-        self.data['cases']=self.data['cases'][-100:]
         await self.save()
 
     def match(self,text,owner,canonical=False):
         return parse_commands(text,self.catalog(),self.data['rules'],owner,canonical)
 
-    async def execute(self,plans,context):
+    def match_compound(self,text,owner):
+        from .compound_commands import CONNECTORS,plan
+        if not CONNECTORS.search(text):return None
+        return plan(text,self.catalog(),self.data['rules'],owner)
+
+    def match_direct(self,text,owner):
+        from .compound_commands import single
+        return single(text,self.catalog(),self.data['rules'],owner)
+
+    def match_followup(self,text,previous):
+        from .compound_commands import followup
+        return followup(text,self.catalog(),previous)
+
+    async def execute(self,plans,context,*,stop_on_failure=False):
         caps={c['id']:c for c in self.catalog(context)};prepared=[]
         if not 1<=len(plans)<=8:raise ValueError('每次支持1至8条本地动作。')
         user=await self.hass.auth.async_get_user(context.user_id) if getattr(context,'user_id',None) else None
@@ -145,7 +172,7 @@ class RouteLearning:
             prepared.append((cap,data,value))
         results=[]
         # All targets and parameters are validated before the first side effect.
-        for cap,data,value in prepared:
+        for index,(cap,data,value) in enumerate(prepared):
             try:
                 await self.hass.services.async_call(cap['domain'],cap['service'],data,blocking=True,context=context)
                 status='done'
@@ -153,13 +180,21 @@ class RouteLearning:
                 _LOGGER.warning('Local command failed for %s',cap['entity_id']);status='failed'
             label=cap['command'].replace('{value}',f'{value:g}' if value is not None else '')
             results.append({'capability_id':cap['id'],'description':label,'status':status})
+            if status=='failed' and stop_on_failure:
+                for later,_data,later_value in prepared[index+1:]:
+                    label=later['command'].replace('{value}',f'{later_value:g}' if later_value is not None else '')
+                    results.append({'capability_id':later['id'],'description':label,'status':'skipped'})
+                break
         return results
 
     @staticmethod
     def response(results):
         done=[r['description'] for r in results if r['status']=='done']
-        failed=[r['description'] for r in results if r['status']!='done']
-        return ('已完成：'+'；'.join(done)+'。' if done else '')+('未完成：'+'；'.join(failed)+'，请检查设备。' if failed else '')
+        failed=[r['description'] for r in results if r['status']=='failed']
+        skipped=[r['description'] for r in results if r['status']=='skipped']
+        return (('已完成：'+'；'.join(done)+'。' if done else '')
+                +('未完成：'+'；'.join(failed)+'，请检查设备。' if failed else '')
+                +('后续未执行：'+'；'.join(skipped)+'。' if skipped else ''))
 
     async def economy(self,text,owner,session,context,stats):
         caps=self.catalog(context)
@@ -206,9 +241,10 @@ class RouteLearning:
             if time.monotonic()-self.last_activity<quiet:return
             if self.usage()['research_calls']>=self.setting('learning_daily_limit',3):
                 self.status='今日后台研究次数已用完，明天继续';return
-            case=next((c for c in self.data['cases'] if c['status']=='pending'),None)
+            case=max((c for c in self.data['cases'] if c['status']=='pending'),key=lambda c:c.get('count',1),default=None)
             if not case:return
             case['status']='researching';case['attempts']+=1;self.status='大模型正在分析本地回退原因'
+            route_samples.sync_analysis(self.data,case)
             caps=self.catalog();selected=select_caps(caps,case['text'])
             proof_ids={e['capability_id'] for e in case.get('evidence',[])}
             selected={c['id']:c for c in [*selected,*[c for c in caps if c['id'] in proof_ids]]}
@@ -223,7 +259,10 @@ class RouteLearning:
             result=await self._json_call([{'role':'system','content':prompt},{'role':'user','content':json.dumps(payload,ensure_ascii=False)}],'research')
             if self.active:raise asyncio.CancelledError()
             reason=str(result.get('reason','未提供原因'))[:800];case['reason']=reason
-            if result.get('decision')=='learn':
+            sample=next((s for s in self.data.get('samples',[]) if s['id']==route_samples.sample_id(case['owner'],case['text'])),{})
+            if sample.get('label')=='llm':
+                case['status']='review_only';case['reason']='人工已确认应交给LLM，不扩展本地句式。'
+            elif result.get('decision')=='learn':
                 try:
                     rule=validate_proposal(result,case,caps,self.data['rules'])
                     # Ambiguous compound/contextual phrases stay in LLM, even if a permissive proposal matched.
@@ -238,14 +277,17 @@ class RouteLearning:
                     case['status']='review_only';case['reason']=reason+' 本地检查：'+str(error)
             else:case['status']='review_only'
             case['completed_at']=dt_util.now().isoformat()
+            route_samples.sync_analysis(self.data,case)
             await self.save();self.status='分析完成'
         except asyncio.CancelledError:
             if case and case['status']=='researching':case['status']='pending'
+            if case:route_samples.sync_analysis(self.data,case)
             await self.save();self.status='新指令到达，后台已暂停';raise
         except Exception as error:
             if case:
                 case['status']='pending' if case['attempts']<2 else 'error'
                 case['reason']='后台分析未完成，可重试；错误类型：'+type(error).__name__
+                route_samples.sync_analysis(self.data,case)
             await self.save();self.status='后台分析暂未完成'
             self.last_activity=time.monotonic()
         finally:
@@ -259,7 +301,7 @@ class RouteLearning:
                 self.last_activity=time.monotonic();self._schedule()
             async_dispatcher_send(self.hass,SIGNAL_TRACE)
 
-    def view(self,owner):
+    def view(self,owner,offset=0):
         signatures={cap['id']:cap['signature'] for cap in self.catalog()}
         return {'mode':self.setting('routing_mode','normal'),'mode_name':MODE_NAMES[self.setting('routing_mode','normal')],
                 'idle_learning':self.setting('idle_learning',True),'idle_seconds':self.setting('learning_idle_seconds',90),
@@ -267,16 +309,38 @@ class RouteLearning:
                 'rules':[dict(copy.deepcopy(r),available=signatures.get(r['capability_id'])==r['signature'])
                          for r in self.data['rules'] if r['owner']==owner],
                 'cases':[{k:copy.deepcopy(v) for k,v in c.items() if k not in ('owner','context_user_id')}
-                         for c in reversed(self.data['cases']) if c['owner']==owner]}
+                         for c in list(c for c in reversed(self.data['cases']) if c['owner']==owner)[:100]],
+                'samples':route_samples.sample_page(self.data,owner,offset),
+                'samples_offset':offset,'sample_summary':route_samples.summary(self.data,owner)}
 
-    async def manage(self,owner,operation,rule_id=None):
+    async def manage(self,owner,operation,rule_id=None,*,sample_id=None,label=None,offset=0,reviewed_only=False):
         rule=next((r for r in self.data['rules'] if r['id']==rule_id and r['owner']==owner),None)
         if operation in ('enable','disable'):
             if not rule:raise ValueError('没有找到当前账号的规则。')
             rule['enabled']=operation=='enable';self.data['revision']+=1;await self.save()
         elif operation=='retry':
             for c in self.data['cases']:
-                if c['owner']==owner and c['status'] in ('error','review_only'):
+                if c['owner']==owner and c['status']=='error':
                     c['status']='pending';c['attempts']=0
+                    route_samples.sync_analysis(self.data,c)
             await self.save();self._schedule()
-        return self.view(owner)
+        elif operation=='label':
+            route_samples.set_label(self.data,owner,sample_id,label,dt_util.now().isoformat())
+            case=next((c for c in self.data['cases'] if c['owner']==owner and route_samples.sample_id(owner,c['text'])==sample_id),None)
+            if case and label=='llm':
+                if case['status']=='researching' and self.task:
+                    self.task.cancel()
+                    try:await self.task
+                    except asyncio.CancelledError:pass
+                # Existing learned rules remain explicitly managed by their own enable/disable buttons.
+                if case['status'] in ('pending','error','review_only'):
+                    case['status']='review_only';case['reason']='人工已确认应交给LLM，不再后台分析。'
+                    route_samples.sync_analysis(self.data,case)
+            await self.save()
+        elif operation=='export':
+            payload=copy.deepcopy({'samples':[s for s in self.data.get('samples',[]) if s['owner']==owner]})
+            content,count=await self.hass.async_add_executor_job(route_samples.export_xlsx,payload,owner,reviewed_only)
+            return {'filename':'router_samples_'+('reviewed_' if reviewed_only else 'all_')+dt_util.now().strftime('%Y%m%d_%H%M%S')+'.xlsx',
+                    'mime':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+                    'content_base64':base64.b64encode(content).decode('ascii'),'rows':count}
+        return self.view(owner,offset)
